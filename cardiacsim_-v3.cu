@@ -16,57 +16,41 @@ double getTime()
     return( ((double)TV.tv_sec) + kMicro * ((double)TV.tv_usec) );
 }
 
-#define BS 32
 
 __global__ void kernel(double* e,  double* e_prev, double* r,
                       const double alpha, const int n, const int m, const double kk,
                       const double dt, const double a, const double epsilon,
                       const double M1,const double  M2, const double b) {
 
-  int row = blockIdx.y * blockDim.y + threadIdx.y;
-  int column = blockIdx.x * blockDim.x + threadIdx.x;
-  int idx = (row+1)*(n+2)+(column+1);
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int column = blockIdx.x * blockDim.x + threadIdx.x;
+    int idx = (row+1)*(n+2)+(column+1);
 
-  __shared__ double tile[BS + 2 ][BS + 2 ];
+    if (row == 0 && column<n)
+        e_prev[idx - (n+2)] = e_prev[idx + (n+2)];
+    if (row == (n-1) && column<n)
+        e_prev[idx + (n+2)] = e_prev[idx - (n+2)];
+    if (column == 0 && row<n)
+        e_prev[idx - 1] = e_prev[idx + 1];
+    if (column == (n-1) && row<n)
+        e_prev[idx + 1] = e_prev[idx - 1];
 
-  //local indices
-  int tile_col = threadIdx.x + 1;
-  int tile_row = threadIdx.y + 1;
+    // using registers
+    double e_ij;
+    double r_ij;
 
-  // Mirroring
-  if (row == 0 && column<n)
-    e_prev[idx - (n+2)] = e_prev[idx + (n+2)];
-  if (row == (n-1) && column<n)
-    e_prev[idx + (n+2)] = e_prev[idx - (n+2)];
-  if (column == 0 && row<n)
-    e_prev[idx - 1] = e_prev[idx + 1];
-  if (column == (n-1) && row<n)
-    e_prev[idx + 1] = e_prev[idx - 1];
-  __syncthreads();
+    if (column<n && row<n) {
+        e[idx] = e_prev[idx]+alpha*(e_prev[idx+1] + e_prev[idx-1] - 4*e_prev[idx] + e_prev[idx+(n+2)] + e_prev[idx-(n+2)]);
 
-  //interior points
-  double center = e_prev[idx];
-  tile[tile_row][tile_col] = center;
-  __syncthreads();
+        e_ij = e[idx];
+        r_ij = r[idx];
 
-  // gost of tile
-  if(tile_row == 1)
-    tile[0][tile_col] = e_prev[idx - (n+2)] ;
-  else if (tile_row == BS)
-    tile[BS+1][tile_col] = e_prev[idx + (n+2)] ;
-  if(tile_col == 1)
-    tile[tile_row][0] = e_prev[idx - 1] ;
-  else if (tile_col == BS)
-    tile[tile_row][BS+1] = e_prev[idx + 1] ;
-  __syncthreads();
+        e_ij = e_ij -dt*(kk* e_ij*(e_ij - a)*(e_ij-1)+ e_ij *r_ij);
+        r_ij = r_ij + dt*(epsilon+M1* r_ij/( e_ij+M2))*(-r_ij-kk* e_ij*(e_ij-b-1));
 
-  if (column<n && row<n)
-  {
-    e[idx] = center + alpha*(tile[tile_row][tile_col+1] + tile[tile_row][tile_col-1] - 4*center + tile[tile_row+1][tile_col] + tile[tile_row-1][tile_col]);
-    e[idx] = e[idx] -dt*(kk* e[idx]*(e[idx] - a)*(e[idx]-1)+ e[idx] *r[idx]);
-    r[idx] = r[idx] + dt*(epsilon+M1* r[idx]/( e[idx]+M2))*(-r[idx]-kk* e[idx]*(e[idx]-b-1));
-  }
-
+        e[idx] = e_ij;
+        r[idx] = r_ij;
+    }
 }
 
 
@@ -146,7 +130,7 @@ int main() {
     double time_elapsed = getTime() - t0;
     printf("Elapsed Time (sec) %g \n",time_elapsed);
 
-    FILE * fp = fopen("v4.txt","w");
+    FILE * fp = fopen("v3.txt","w");
     for (int i=1; i<m+1; i++)
         for (int j=1; j<n+1; j++)
             fprintf(fp,"%f\n", E[i*(n+2)+j]);
